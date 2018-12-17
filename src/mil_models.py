@@ -6,60 +6,65 @@ from model import Model
 
 class MILModel(Model):
 
-  def get_probabilities(self, input, reuse=False):
-    with tf.variable_scope("model", reuse=reuse):
-      if self.config.mil_type == "vote":
-        left_images, right_images = tf.split(input, 2, axis=1)
-        left_cc, left_mlo = tf.split(left_images, 2, axis=2)
-        right_cc, right_mlo = tf.split(right_images, 2, axis=2)
-        inputs = [left_cc, left_mlo, right_cc, right_mlo]
-      else:
-        inputs = [input]
+  def create_model(self):
+    # Input and training status placeholder
+    self.image_input = tf.placeholder(tf.float32, [None, self.config.image_height, self.config.image_width, self.config.image_channels])
+      
+    self.training = tf.placeholder(tf.bool)
 
-      logits = []
-      for input in inputs:
-        print("~~~")
-        print(input.shape)
+    if self.config.mil_type == "vote":
+      left_images, right_images = tf.split(self.image_input, 2, axis=1)
+      left_cc, left_mlo = tf.split(left_images, 2, axis=2)
+      right_cc, right_mlo = tf.split(right_images, 2, axis=2)
+      inputs = [left_cc, left_mlo, right_cc, right_mlo]
+    else:
+      inputs = [self.image_input]
 
-        l = self.encode(input)
-        print(l.shape)
+    self.logits = []
+    for input in inputs:
+      print("~~~")
+      print(input.shape)
 
-        # Flatten output of previous layer, then feed into dense
-        l = tf.layers.flatten(l)
-        print(l.shape)
+      l = self.encode(input)
 
-        if self.config.mil_type == "vote" and self.config.sigmoid_before_vote:
-          l = tf.sigmoid(l)
-
-        logits.append(l)
-
-      print("---")
-      if self.config.mil_type == "vote":
-        stacked_logits = tf.stack(logits, axis=1)
-        print(stacked_logits.shape)
-        if self.config.vote_type == "nn":
-          print("nn")
-          # Hack to get rid of the last dimension while keeping the shape known.
-          stacked_logits = tf.reduce_mean(stacked_logits, axis=2)
-          print(stacked_logits.shape)
-          l = self.create_dense_layers(stacked_logits, [len(logits)])
-        elif self.config.vote_type == "mean":
-          print("mean")
-          l = tf.reduce_mean(stacked_logits, axis=1, keepdims=True)
-        elif self.config.vote_type == "max":
-          print("max")
-          l = tf.reduce_max(stacked_logits, axis=1, keepdims=True)
-      else:
-        l = logits[0]
+      # Flatten output of previous layer, then feed into dense
+      l = tf.layers.flatten(l)
       print(l.shape)
 
-      return tf.nn.sigmoid(l)
+      if self.config.mil_type == "vote" and self.config.sigmoid_before_vote:
+        l = tf.sigmoid(l)
 
-  def set_up_eval_graph(self):
-    """Override the default eval graph to do the proper type of MIL."""
-    self.eval_probabilities = self.get_probabilities(self.eval_inputs, reuse=True)
-    self.eval_predictions = tf.round(self.eval_probabilities)
-    self.eval_precision, self.eval_recall, self.eval_f1, self.eval_accuracy = self.create_metrics(self.eval_predictions)
+      self.logits.append(l)
+
+    print("---")
+    if self.config.mil_type == "vote":
+      self.stacked_logits = tf.stack(self.logits, axis=1)
+      print(self.stacked_logits.shape)
+      if self.config.vote_type == "nn":
+        print("nn")
+        self.stacked_logits = tf.reduce_mean(self.stacked_logits,axis=2)
+        self.output = self.create_dense_layers(self.stacked_logits, [len(self.logits)])
+      elif self.config.vote_type == "mean":
+        print("mean")
+        self.output = tf.reduce_mean(self.stacked_logits, axis=1, keepdims=True)
+      elif self.config.vote_type == "max":
+        print("max")
+        self.output = tf.reduce_max(self.stacked_logits, axis=1, keepdims=True)
+    else:
+      self.output = self.logits[0]
+    print(self.output.shape)
+    print('--')
+
+    # Network output
+    self.probabilities = tf.nn.sigmoid(self.output)
+    self.predictions = tf.math.round(self.probabilities)
+
+    # Labels placeholder
+    self.label_input = tf.placeholder(tf.float32, [None, 1])
+
+    # Loss
+    self.loss = -tf.reduce_mean(self.config.positive_error_rate_multiplier * self.label_input * tf.log(self.probabilities) + (1-self.label_input) * tf.log(1-self.probabilities))
+    self.loss += self.config.regularization_loss_weight * tf.reduce_mean(tf.losses.get_regularization_losses())
 
 class BaselineMILModel(MILModel):
 

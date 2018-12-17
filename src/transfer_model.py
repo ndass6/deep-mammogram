@@ -6,32 +6,35 @@ from model import Model
 
 class TransferModel(Model):
 
-  def __init__(self, model_name, config, eval_config):
-    module_spec = hub.load_module_spec(config.tfhub_module)
-    if config.trainable:
-      self.module = hub.Module(module_spec, trainable=True, tags=['train'])
-    else:
-      self.module = hub.Module(module_spec, trainable=False)
-
-    super(TransferModel, self).__init__(model_name, config, eval_config) 
-    if config.trainable:
+  def create_model(self):
+    self.module_spec = hub.load_module_spec(self.config.tfhub_module)
+    if self.config.trainable:
       self.log("Inception module is trainable!")
+      self.module = hub.Module(self.module_spec, trainable=True, tags=['train'])
     else:
       self.log("Inception module is frozen!")
+      self.module = hub.Module(self.module_spec, trainable=False)
 
-  def get_probabilities(self, inputs, reuse=False):
-    with tf.variable_scope("model", reuse=reuse):
-      print(inputs.shape)
+    self.image_input = tf.placeholder(tf.float32, [None, self.config.image_height, self.config.image_width, self.config.image_channels])
+    l = self.image_input
 
-      l = self.module(inputs)
-      print(l.shape)
+    l = self.module(l)
 
-      # Flatten module output and add dense layers
-      l = tf.layers.flatten(l)
-      print(l.shape)
-      
-      dense_layers = [128]
-      l = self.create_dense_layers(l, dense_layers)
-      print(l.shape)
+    # Flatten module output and add dense layers
+    l = tf.layers.flatten(l)
+    
+    self.training = tf.placeholder(tf.bool)
+    dense_layers = [128]
+    l = self.create_dense_layers(l, dense_layers)
 
-      return tf.nn.sigmoid(l)
+    self.output = l
+    self.probabilities = tf.nn.sigmoid(self.output)
+    self.predictions = tf.math.round(self.probabilities)
+
+    # Labels placeholder
+    self.label_input = tf.placeholder(tf.float32, [None, 1])
+
+    # Loss
+    cross_entropy_loss = -tf.reduce_mean(self.config.positive_error_rate_multiplier * self.label_input * tf.log(self.probabilities) + (1 - self.label_input) * tf.log(1 - self.probabilities))
+    reg_losses = tf.reduce_mean(tf.losses.get_regularization_losses())
+    self.loss = cross_entropy_loss + self.config.regularization_loss_weight * reg_losses

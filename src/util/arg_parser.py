@@ -9,7 +9,7 @@ def parse_args():
       '--model_name',
       type=str,
       default="mil",
-      help='Type of model: mil, transfer_mil, transfer, baseline',
+      help='Type of model: transfer_mil, mil, transfer, baseline',
       required=True
   )
   parser.add_argument(
@@ -62,8 +62,14 @@ def parse_args():
   parser.add_argument(
       '--regularization_loss_weight',
       type=float,
-      default=1e-2,
+      default=1e-7,
       help='Scale for L2 regularization'
+  )
+  parser.add_argument(
+      '--dropout_rate',
+      type=float,
+      default=0.5,
+      help='Dropout rate'
   )
   parser.add_argument(
       '--validate_freq',

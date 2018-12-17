@@ -14,34 +14,17 @@ from util.data_iterator import DataIterator
 
 class Model:
   """
-  To define a model, inherit this class and implement one method:
-    get_probabilities(self, inputs, reuse).
-
-  Optionally, you can change the train graph, eval graph, or loss function by
-    overriding the respective methods.
+  To define a model, inherit this class, implement a method to create your model.
   """
-  def __init__(self, model_name, config, eval_config):
+  def __init__(self, model_name, config):
     self.model_name = model_name
     self.config = config
     self.prepare_logs()
     self.sess = tf.Session()
-    self.train_data_iterator = DataIterator(config)
-    self.eval_data_iterator = DataIterator(eval_config)
-
-    # Input and training status placeholders
-    self.train_inputs = tf.placeholder(tf.float32, [None, self.config.image_height, self.config.image_width, self.config.image_channels])
-    self.eval_inputs = tf.placeholder(tf.float32, [None, eval_config.image_height, eval_config.image_width, eval_config.image_channels])
-    self.label_input = tf.placeholder(tf.float32, [None, 1])
-    self.training = tf.placeholder(tf.bool)
-
-    print("---Setting up training graph---")
-    print(self.train_inputs)
-    self.set_up_train_graph()
-    print("---Setting up eval graph---")
-    print(self.eval_inputs)
-    self.set_up_eval_graph()
-    self.set_up_loss()
+    self.data_iterator = DataIterator(config, config.image_dir)
+    self.create_model()
     self.create_optimizer()
+    self.create_metrics()
     self.saver = tf.train.Saver()
 
   def prepare_logs(self):
@@ -51,6 +34,7 @@ class Model:
     if not os.path.isdir("../experiments/"):
       os.makedirs("../experiments/")
     self.log_file = self.root_dir + 'log.txt'
+    print(self.root_dir)
     assert not os.path.isdir(self.root_dir)
     os.makedirs(self.root_dir)
     os.makedirs(self.root_dir + "plots/")
@@ -65,38 +49,17 @@ class Model:
       f.write(pp.pformat(self.config.__dict__) + '\n')
       f.write(pp.pformat(self.__dict__) + '\n\n')
 
-  def get_probabilities(self, inputs, reuse=False):
+  def create_model(self):
     """
-    Returns tensor of probabilities [batch_size, 1]
+    Your model should set these values at the minimum:
+      self.image_input
+      self.training
+      self.probabilities
+      self.predictions
+      self.label_input
+      self.loss
     """
     raise Exception("Implement this.")
-
-  def set_up_train_graph(self):
-    """Optionally override if you want your model to train in a different way."""
-    self.train_probabilities = self.get_probabilities(self.train_inputs)
-    self.train_predictions = tf.round(self.train_probabilities)
-    self.train_precision, self.train_recall, self.train_f1, self.train_accuracy = self.create_metrics(self.train_predictions)
-
-  def set_up_eval_graph(self):
-    """Optionally override if you want your model to evaluate in a different way."""
-    left_images, right_images = tf.split(self.eval_inputs, 2, axis=1)
-    left_cc, left_mlo = tf.split(left_images, 2, axis=2)
-    right_cc, right_mlo = tf.split(right_images, 2, axis=2)
-    eval_logits = []
-    for eval_image in [left_cc, left_mlo, right_cc, right_mlo]:
-      eval_logits.append(self.get_probabilities(eval_image, reuse=True))
-      print("~~~")
-
-    stacked_eval_logits = tf.stack(eval_logits, axis=1)
-    eval_vote = tf.reduce_max(stacked_eval_logits, axis=1, keepdims=True)
-    self.eval_probabilities = tf.nn.sigmoid(eval_vote)
-    self.eval_predictions = tf.round(self.eval_probabilities)
-    self.eval_precision, self.eval_recall, self.eval_f1, self.eval_accuracy = self.create_metrics(self.eval_predictions)
-
-  def set_up_loss(self):
-    """Optionally override if you want your model to use a different loss."""
-    self.loss = -tf.reduce_mean(self.config.positive_error_rate_multiplier * self.label_input * tf.log(self.train_probabilities) + (1 - self.label_input) * tf.log(1 - self.train_probabilities))
-    self.loss += self.config.regularization_loss_weight * tf.reduce_mean(tf.losses.get_regularization_losses())
 
   def create_conv_layers(self, l, conv_layers):
     for filters, kernel_size, kernel_stride, pool_stride in conv_layers:
@@ -114,9 +77,9 @@ class Model:
       # Apply non-linear activation
       l = tf.nn.relu(l)
       
-      # if self.config.dropout:
-      #   # Apply dropout
-      #   l = tf.layers.dropout(l, training=self.training)
+      if self.config.dropout:
+        # Apply dropout
+        l = tf.layers.dropout(l, training=self.training, rate=self.config.dropout_rate)
 
       # Pool
       l = tf.layers.max_pooling2d(inputs=l, pool_size=[pool_stride] * 2, strides=pool_stride)
@@ -140,7 +103,7 @@ class Model:
 
       if self.config.dropout:
         # Apply dropout
-        l = tf.layers.dropout(l, training=self.training)
+        l = tf.layers.dropout(l, training=self.training, rate=self.config.dropout_rate)
 
     # Final output layer
     l = tf.layers.dense(inputs=l,
@@ -149,32 +112,30 @@ class Model:
                         kernel_regularizer=tf.contrib.layers.l2_regularizer(scale=self.config.regularization_scale))
     return l
 
-  def create_metrics(self, predictions):
+  def create_metrics(self):
     """
     Needs to be called after creating a model.
     """
     self.train_metrics = None
     self.dev_metrics = None
     # Metrics
-    true_positive = tf.cast(tf.count_nonzero(predictions * self.label_input), tf.float32)
-    true_negative = tf.cast(tf.count_nonzero((predictions - 1) * (self.label_input - 1)), tf.float32)
-    false_positive = tf.cast(tf.count_nonzero(predictions * (self.label_input - 1)), tf.float32)
-    false_negative = tf.cast(tf.count_nonzero((predictions - 1) * self.label_input), tf.float32)
+    true_positive = tf.cast(tf.count_nonzero(self.predictions * self.label_input), tf.float32)
+    true_negative = tf.cast(tf.count_nonzero((self.predictions - 1) * (self.label_input - 1)), tf.float32)
+    false_positive = tf.cast(tf.count_nonzero(self.predictions * (self.label_input - 1)), tf.float32)
+    false_negative = tf.cast(tf.count_nonzero((self.predictions - 1) * self.label_input), tf.float32)
 
     tiny_number = 1e-10
-    precision = true_positive / (true_positive + false_positive + tiny_number)
-    recall = true_positive / (true_positive + false_negative + tiny_number)
-    f1 = 2 * precision * recall / (precision + recall + tiny_number)
+    self.precision = true_positive / (true_positive + false_positive + tiny_number)
+    self.recall = true_positive / (true_positive + false_negative + tiny_number)
+    self.f1 = 2 * self.precision * self.recall / (self.precision + self.recall + tiny_number)
 
-    accuracy = tf.reduce_mean(tf.cast(tf.math.equal(predictions, self.label_input), tf.float32))
-
-    return precision, recall, f1, accuracy
+    self.accuracy = tf.reduce_mean(tf.cast(tf.math.equal(self.predictions, self.label_input), tf.float32))
 
   def create_optimizer(self):
     """
     Needs to be called after creating a model.
     """
-    num_minibatches = self.train_data_iterator.get_ops('train')[3]
+    num_minibatches = self.data_iterator.get_ops('train')[3]
 
     self.learning_rate = tf.train.exponential_decay(learning_rate=self.config.learning_rate, 
                                           global_step=tf.train.get_or_create_global_step(), 
@@ -212,7 +173,7 @@ class Model:
 
   def train(self):
     self.sess.run(tf.global_variables_initializer())
-    init_op, inputs_op, labels_op, num_minibatches = self.train_data_iterator.get_ops('train')
+    init_op, inputs_op, labels_op, num_minibatches = self.data_iterator.get_ops('train')
 
     if self.config.quick:
       num_minibatches = num_minibatches // 100
@@ -246,8 +207,8 @@ class Model:
             inputs = self.augment_images(inputs)
           # Train and get metrics
           _, predictions, precision, recall, f1, accuracy = self.sess.run(
-            [self.step, self.train_predictions, self.train_precision, self.train_recall, self.train_f1, self.train_accuracy],
-            feed_dict={self.train_inputs: inputs, self.label_input: labels, self.training: True})
+            [self.step, self.predictions, self.precision, self.recall, self.f1, self.accuracy],
+            feed_dict={self.image_input: inputs, self.label_input: labels, self.training: True})
           
           # Store metrics
           if i == 0:
@@ -288,32 +249,16 @@ class Model:
       self.dev_metrics = np.vstack((self.dev_metrics, dev_metrics))
 
   def test(self, split):
-    assert split in ('train', 'dev', 'test')
-    if split == 'train':
-      inputs_placeholder = self.train_inputs
-      data_iterator = self.train_data_iterator
-      predictions_op = self.train_predictions
-      precision_op = self.train_precision
-      recall_op = self.train_recall
-      f1_op = self.train_f1
-      accuracy_op = self.train_accuracy
-    else:
-      inputs_placeholder = self.eval_inputs
-      data_iterator = self.eval_data_iterator
-      predictions_op = self.eval_predictions
-      precision_op = self.eval_precision
-      recall_op = self.eval_recall
-      f1_op = self.eval_f1
-      accuracy_op = self.eval_accuracy
-    init_op, inputs_op, labels_op, num_minibatches = data_iterator.get_ops(split)
+    assert split in ['train','test','dev']
+    init_op, inputs_op, labels_op, num_minibatches = self.data_iterator.get_ops(split)
 
     self.sess.run(init_op)
 
     for i in range(num_minibatches):
       inputs, labels = self.sess.run([inputs_op, labels_op])
       predictions, precision, recall, f1, accuracy = self.sess.run(
-        [predictions_op, precision_op, recall_op, f1_op, accuracy_op],
-        feed_dict={inputs_placeholder: inputs, self.label_input: labels, self.training: False})
+        [self.predictions, self.precision, self.recall, self.f1, self.accuracy],
+        feed_dict={self.image_input: inputs, self.label_input: labels, self.training: False})
       if i == 0:
         metrics = np.array([precision, recall, f1, accuracy])
       else:

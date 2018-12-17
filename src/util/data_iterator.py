@@ -12,7 +12,7 @@ FLAGS = None
 
 class DataIterator:
   
-  def __init__(self, config):
+  def __init__(self, config, csv_path):
     self.config = config
     metadata_filename = self.get_cwd() + 'data/metadata.txt'
     assert os.path.exists(metadata_filename)
@@ -20,7 +20,7 @@ class DataIterator:
       mean, std = f.readlines()[0].split(',')
       self.mean, self.std = float(mean), float(std)
 
-    self.csv_path = config.image_dir
+    self.csv_path = csv_path
 
   def get_ops(self, load_type):
     assert(load_type in ['test', 'dev', 'train'])
@@ -33,16 +33,16 @@ class DataIterator:
       num_examples = len(f.readlines()) - 1
       num_minibatches = (num_examples // self.config.batch_size + int(num_examples % self.config.batch_size > 0)) * num_epochs
 
-    dataset = tf.data.experimental.make_csv_dataset(
-      csv_path,
-      batch_size=1,
-      column_names=['Path', 'Label'],
-      label_name='Label',
-      header=True,
-      shuffle=True,
-      num_epochs=num_epochs,
-      shuffle_buffer_size=int(1e6),
-      sloppy=True)
+    dataset = tf.data.experimental.make_csv_dataset(csv_path, 
+                                                    batch_size=1,
+                                                    column_names=['Path', 'Label'],
+                                                    label_name='Label',
+                                                    header=True,
+                                                    shuffle=True,
+                                                    num_epochs=num_epochs,
+                                                    shuffle_buffer_size=int(1e6),
+                                                    sloppy=True,
+                                                    )
 
     parse_function = self.load_data
     # The map function will call _parse_function on each (filename, label) pair
